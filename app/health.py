@@ -11,7 +11,7 @@ PRINTER_USB_VENDORS = {
 
 def internet_ok(timeout=3) -> bool:
     try:
-        urllib.request.urlopen("https://www.google.com", timeout)
+        urllib.request.urlopen("https://www.google.com", data=None, timeout=timeout)
         return True
     except Exception:
         health_logger.exception("Internet connection interupted")
@@ -20,7 +20,7 @@ def internet_ok(timeout=3) -> bool:
 
 def printer_connected() -> bool:
     try:
-        result = subprocess.check_output(["/usr/bin/lsusb"], text=True)
+        result = subprocess.check_output(["/usr/bin/lsusb"], text=True, timeout=3)
         for line in result.splitlines():
             for vendor_id in PRINTER_USB_VENDORS:
                 if f"ID {vendor_id}:" in line:

@@ -6,6 +6,7 @@ import os
 from app.ws import ws_manager
 from app.logger import app_logger, event_logger
 from app.health import printer_connected
+from app.state import kiosk_state
 
 class PrinterUnavailable(Exception):
     pass
@@ -120,52 +121,58 @@ def print_document(file_path: str, code: str = None, jobId1: str = None, print_o
         print_options = {}
     
     try:
+        if printer_connected():
         # Get printer
-        printer = get_default_printer()
-        event_logger.info(f"Using printer: {printer}")
+            printer = get_default_printer()
+            event_logger.info(f"Using printer: {printer}")
         
         # Build command with options
-        cmd = build_lp_command(printer, file_path, print_options)
+            cmd = build_lp_command(printer, file_path, print_options)
         
         # Log the command for debugging
-        app_logger.info(f"Print command: {' '.join(cmd)}")
+            app_logger.info(f"Print command: {' '.join(cmd)}")
         
         # Execute print command
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
         
-        if result.returncode != 0:
-            app_logger.error(f"Print command failed: {result.stderr}")
-            raise PrinterUnavailable(f"PRINT_FAILED: {result.stderr}")
+            if result.returncode != 0:
+                app_logger.error(f"Print command failed: {result.stderr}")
+                raise PrinterUnavailable(f"PRINT_FAILED: {result.stderr}")
         
         # Extract job ID from lp output
         # Output format: "request id is printer-123 (1 file(s))"
-        lp_job_id = None
-        if "request id is" in result.stdout:
-            lp_job_id = result.stdout.split("request id is")[1].split()[0].strip()
-            event_logger.info(f"Print job submitted: {lp_job_id} (code: {code}, server job: {jobId1})")
+            lp_job_id = None
+            if "request id is" in result.stdout:
+                lp_job_id = result.stdout.split("request id is")[1].split()[0].strip()
+                event_logger.info(f"Print job submitted: {lp_job_id} (code: {code}, server job: {jobId1})")
         
         # Start monitoring in background
-        threading.Thread(
-            target=monitor_job,
-            args=(lp_job_id, code, jobId1, printer),
-            daemon=True
-        ).start()
+            threading.Thread(
+                target=monitor_job,
+                args=(lp_job_id, code, jobId1, printer, file_path),
+                daemon=True
+            ).start()
         
-        return lp_job_id
-        
+            return lp_job_id
+        else:
+            app_logger.error("Print command timed out")
+            delete_temp_file(file_path)
+            raise PrinterUnavailable("PRINTER_OFFlINE")
     except subprocess.TimeoutExpired:
         app_logger.error("Print command timed out")
+        delete_temp_file(file_path)
         raise PrinterUnavailable("PRINT_TIMEOUT")
     except Exception as e:
         app_logger.error(f"Failed to print: {e}")
+        delete_temp_file(file_path)
         raise PrinterUnavailable(f"PRINT_ERROR: {e}")
 
-def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str):
+def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str, file_path: str):
     """Monitor print job status using lpstat"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -178,7 +185,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
             # Check timeout
             if time.time() - start_time > timeout:
                 event_logger.error(f"Print job {lp_job_id} timed out")
-                
+                kiosk_state.set_handling_print_error(True)
                 # Cancel the job
                 try:
                     subprocess.run(["cancel", lp_job_id], timeout=5)
@@ -193,6 +200,8 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                     loop.run_until_complete(
                         notify_server_failed(code, server_job_id, "Print Timed Out")
                     )
+                time.sleep(30)
+                kiosk_state.set_handling_print_error(False)
                 break
             
             try:
@@ -213,6 +222,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                     if elapsed < 0:
                         # Job disappeared too quickly - likely error
                         event_logger.error(f"Print job {lp_job_id} failed immediately")
+                        kiosk_state.set_handling_print_error(True)
                         loop.run_until_complete(
                             ws_manager.broadcast({"event": "PRINT_FAILED"})
                         )
@@ -220,6 +230,8 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                             loop.run_until_complete(
                                 notify_server_failed(code, server_job_id, "Job failed immediately")
                             )
+                        time.sleep(30)
+                        kiosk_state.set_handling_print_error(False)
                     else:
                         result_status = subprocess.run(
                         ["lpstat", "-W", "not-completed"],
@@ -243,6 +255,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                                     )'''
                             else:
                                 event_logger.info("Cups print job completed but printer connection interuppted #bhai cups ka job huva lekin printer band hogaya")
+                                kiosk_state.set_handling_print_error(True)
                                 loop.run_until_complete(
                                     ws_manager.broadcast({"event": "PRINT_FAILED"})
                                 )
@@ -250,7 +263,8 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                                     loop.run_until_completed(
                                         notify_server_failed(code, server_job_id, "Cups print job completed but printer connection interuppted")
                                     )'''
-                                    
+                                time.sleep(30)
+                                kiosk_state.set_handling_print_error(False)
                             break
                 
                 # Job still in queue - check state
@@ -264,7 +278,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                         subprocess.run(["cancel", lp_job_id], timeout=5)
                     except:
                         pass
-                    
+                    kiosk_state.set_handling_print_error(True)
                     loop.run_until_complete(
                         ws_manager.broadcast({"event": "PRINT_FAILED"})
                     )
@@ -273,6 +287,8 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                         loop.run_until_complete(
                             notify_server_failed(code, server_job_id, "Print error")
                         )
+                    time.sleep(30)
+                    kiosk_state.set_handling_print_error(False)
                     break
                 
             except subprocess.TimeoutExpired:
@@ -284,12 +300,15 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
             
     except Exception as e:
         app_logger.exception(f"Fatal error monitoring job {lp_job_id}")
+        kiosk_state.set_handling_print_error(True)
         loop.run_until_complete(
             ws_manager.broadcast({"event": "PRINT_FAILED"})
         )
+        time.sleep(30)
+        kiosk_state.set_handling_print_error(False)
     finally:
         loop.close()
-
+        delete_temp_file(file_path)
 async def notify_server_success(code: str, job_id: str):
     """Notify server of successful print"""
     import httpx
@@ -345,3 +364,14 @@ async def notify_server_failed(code: str, job_id: str, fail_message: str):
                 
     except Exception as e:
         app_logger.error(f"Failed to notify server: {e}")
+
+def delete_temp_file(file_path: str):
+    """Safely delete temporary PDF file"""
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            event_logger.info(f"Temp file deleted: {file_path}")
+        else:
+            app_logger.warning(f"Temp file not found: {file_path}")
+    except Exception as e:
+        app_logger.error(f"Failed to delete temp file {file_path}: {e}")

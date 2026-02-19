@@ -2,7 +2,7 @@ import httpx
 import tempfile
 import os
 
-SERVER_URL = "http://134.209.154.249:8000/api/kiosk" #apna url dalde idhar
+SERVER_URL = "https://api.paynprint.com/api/kiosk" #apna url dalde idhar
 KIOSK_ID= os.getenv("KIOSK_ID", "UNKNOWN")
 
 class InvalidCode(Exception):

@@ -1,5 +1,7 @@
 import threading
-from fastapi import FastAPI, WebSocket, Request
+import asyncio
+import subprocess
+from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.ws import ws_manager
@@ -22,6 +24,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def cleanup_printer_on_startup():
+    """
+    Clear all print jobs and enable printer on startup.
+    Prevents stuck jobs from previous sessions.
+    """
+    try:
+        # Cancel all print jobs
+        event_logger.info("Canceling all pending print jobs...")
+        result = subprocess.run(
+            ["cancel", "-a"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            event_logger.info("✅ All print jobs cancelled")
+        else:
+            event_logger.warning(f"Cancel jobs returned code {result.returncode}: {result.stderr}")
+        
+        # Get printer name
+        lpstat_result = subprocess.run(
+            ["/usr/bin/lpstat", "-p"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if lpstat_result.returncode == 0 and lpstat_result.stdout:
+            # Extract printer name from first line
+            # Output: "printer HP_LaserJet_Pro is idle..."
+            first_line = lpstat_result.stdout.split("\n")[0]
+            printer_name = "HpQueue" #first_line.split()[1]
+            
+            # Enable the printer
+            event_logger.info(f"Enabling printer: {printer_name}")
+            enable_result = subprocess.run(
+                ["cupsenable", printer_name],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            if enable_result.returncode == 0:
+                event_logger.info(f"✅ Printer {printer_name} enabled")
+            else:
+                event_logger.warning(f"cupsenable returned code {enable_result.returncode}: {enable_result.stderr}")
+        else:
+            event_logger.warning("No printer found to enable")
+            
+    except subprocess.TimeoutExpired:
+        event_logger.error("Timeout during printer cleanup")
+    except Exception as e:
+        event_logger.error(f"Error during printer cleanup: {e}", exc_info=True)
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     # Let /print handle its own exceptions
@@ -41,6 +98,9 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 def startup():
+    cleanup_printer_on_startup()
+    '''async def startup_event():
+        asyncio.create_task(start_health_watcher)'''
     threading.Thread(target=start_health_watcher, daemon=True).start()
 
 @app.post("/log/frontend")
@@ -98,7 +158,7 @@ async def start_print(req: PrintRequest):
             content={"status": "INVALID_CODE"}
         )
         
-    except (UpstreamFailure, PrinterUnavailable) as e:
+    except UpstreamFailure as e:
         app_logger.error(
             f"Error invoked in print job: {e}"
         )
@@ -111,6 +171,18 @@ async def start_print(req: PrintRequest):
         if not is_in_recovery_mode():
             start_recovery_polling(SERVER_URL, interval=300)  # Poll every 10 seconds
         
+        return JSONResponse(
+            status_code=503,
+            content={"status": "OUT_OF_SERVICE"}
+        )
+    except PrinterUnavailable as e:
+        app_logger.error(
+            f"Error invoked in print job: {e}"
+        )
+        try:
+            await ws_manager.broadcast({"event": "OUT_OF_SERVICE"})
+        except Exception as broadcast_err:
+            app_logger.error(f"Failed to broadcast OUT_OF_SERVICE: {broadcast_err}")
         return JSONResponse(
             status_code=503,
             content={"status": "OUT_OF_SERVICE"}
@@ -136,10 +208,21 @@ async def start_print(req: PrintRequest):
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    """WebSocket endpoint for real-time status updates"""
     await ws_manager.connect(ws)
+    
     try:
         while True:
             await ws.receive_text()
-    except:
-        event_logger.exception("Unable to establish websocket")
+            
+    except WebSocketDisconnect as e:
+        # Normal disconnect - don't log as error
+        event_logger.info(f"WebSocket client disconnected (code: {e.code})")
+        
+    except Exception as e:
+        # Unexpected error
+        event_logger.error(f"WebSocket unexpected error: {e}", exc_info=True)
+        
+    finally:
+        # Always clean up
         ws_manager.disconnect(ws)
