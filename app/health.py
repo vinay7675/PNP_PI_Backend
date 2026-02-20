@@ -9,15 +9,13 @@ PRINTER_USB_VENDORS = {
     "04f9",  # Brother
 }
 
-def internet_ok(timeout=3) -> bool:
+def internet_ok():
     try:
-        urllib.request.urlopen("https://www.google.com", data=None, timeout=timeout)
+        urllib.request.urlopen("https://www.google.com", timeout=3)
         return True
     except Exception:
-        health_logger.exception("Internet connection interupted")
         return False
-
-
+        
 def printer_connected() -> bool:
     try:
         result = subprocess.check_output(["/usr/bin/lsusb"], text=True, timeout=3)

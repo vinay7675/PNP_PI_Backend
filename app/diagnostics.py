@@ -1,6 +1,7 @@
 import subprocess
 import socket
 import urllib.request
+from app.health import internet_ok, printer_connected
 
 PRINTER_USB_VENDORS = {
     "03f0",  # HP
@@ -9,12 +10,25 @@ PRINTER_USB_VENDORS = {
 }
 
 
-def check_internet():
+'''def check_internet():
     try:
         urllib.request.urlopen("https://www.google.com", timeout=3)
         return True
     except Exception:
         return False
+def check_internet(timeout=2) -> bool:
+    hosts = [
+        ("1.1.1.1", 53),
+        ("8.8.8.8", 53),
+    ]
+    for host in hosts:
+        try:
+            health_logger.info(f"Internet is ok {host}")
+            socket.create_connection(host, timeout=timeout)
+            return True
+        except:
+            continue
+    return False'''
 
 
 def check_backend():
@@ -33,7 +47,7 @@ def check_frontend():
         return False
 
 
-def check_printer():
+'''def check_printer():
     try:
         result = subprocess.check_output(["/usr/bin/lsusb"], text=True)
         for line in result.splitlines():
@@ -43,7 +57,7 @@ def check_printer():
         return False
     except Exception:
         return False
-    '''try:
+    try:
         result1 = subprocess.check_output(
             ["/usr/bin/lpstat", "-p"],
             #stdout=subprocess.PIPE,
@@ -60,8 +74,8 @@ def check_printer():
 
 def run_diagnostics():
     return {
-        "internet": check_internet(),
+        "internet": internet_ok(), #check_internet(),
         "backend": check_backend(),
         "frontend": check_frontend(),
-        "printer": check_printer(),
+        "printer": printer_connected(), #check_printer(),
     }

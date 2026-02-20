@@ -7,6 +7,7 @@ from app.ws import ws_manager
 from app.logger import app_logger, event_logger
 from app.health import printer_connected
 from app.state import kiosk_state
+from app.notification_queue import notification_queue
 
 class PrinterUnavailable(Exception):
     pass
@@ -179,13 +180,13 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
     
     timeout = 300  # 5 minutes
     start_time = time.time()
-    
+    kiosk_state.set_handling_print_error(True)
     try:
         while True:
             # Check timeout
             if time.time() - start_time > timeout:
                 event_logger.error(f"Print job {lp_job_id} timed out")
-                kiosk_state.set_handling_print_error(True)
+                #kiosk_state.set_handling_print_error(True)
                 # Cancel the job
                 try:
                     subprocess.run(["cancel", lp_job_id], timeout=5)
@@ -222,7 +223,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                     if elapsed < 0:
                         # Job disappeared too quickly - likely error
                         event_logger.error(f"Print job {lp_job_id} failed immediately")
-                        kiosk_state.set_handling_print_error(True)
+                        #kiosk_state.set_handling_print_error(True)
                         loop.run_until_complete(
                             ws_manager.broadcast({"event": "PRINT_FAILED"})
                         )
@@ -246,23 +247,26 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                         else:
                             if printer_connected():
                                 #event_logger.info("broadcast karro hogaya")
+                                #kiosk_state.set_handling_print_error(True)
                                 loop.run_until_complete(
                                 ws_manager.broadcast({"event": "DONE"})
                                 )
-                                '''if code:
+                                if code:
                                     loop.run_until_complete(
                                         notify_server_success(code, server_job_id)
-                                    )'''
+                                    )
+                                time.sleep(10)
+                                kiosk_state.set_handling_print_error(False)
                             else:
                                 event_logger.info("Cups print job completed but printer connection interuppted #bhai cups ka job huva lekin printer band hogaya")
-                                kiosk_state.set_handling_print_error(True)
+                                #kiosk_state.set_handling_print_error(True)
                                 loop.run_until_complete(
                                     ws_manager.broadcast({"event": "PRINT_FAILED"})
                                 )
-                                '''if code:
+                                if code:
                                     loop.run_until_completed(
                                         notify_server_failed(code, server_job_id, "Cups print job completed but printer connection interuppted")
-                                    )'''
+                                    )
                                 time.sleep(30)
                                 kiosk_state.set_handling_print_error(False)
                             break
@@ -278,7 +282,7 @@ def monitor_job(lp_job_id: str, code: str, server_job_id: str, printer_name: str
                         subprocess.run(["cancel", lp_job_id], timeout=5)
                     except:
                         pass
-                    kiosk_state.set_handling_print_error(True)
+                    #kiosk_state.set_handling_print_error(True)
                     loop.run_until_complete(
                         ws_manager.broadcast({"event": "PRINT_FAILED"})
                     )
@@ -315,27 +319,25 @@ async def notify_server_success(code: str, job_id: str):
     from app.server_api import SERVER_URL, KIOSK_ID
     
     success_url = f"{SERVER_URL}/{KIOSK_ID}/job/{job_id}/status"
-    
+    payload = {
+        "code": code,
+        "job_id": job_id,
+        "kiosk_id": KIOSK_ID,
+        "status": "failed",
+        "message": f"Print Job Completed"
+    }
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                success_url,
-                json={
-                    "code": code,
-                    "job_id": job_id,
-                    "kiosk_id": KIOSK_ID,
-                    "status": "completed",
-                    "message": f"Print job completed successfully"
-                }
-            )
-            
+            resp = await client.post(success_url, json=payload)
             if resp.status_code == 200:
                 event_logger.info(f"Server notified of success: {code}")
             else:
                 app_logger.warning(f"Server notification failed: {resp.status_code}")
+                notification_queue.add(success_url, payload)
                 
     except Exception as e:
         app_logger.error(f"Failed to notify server: {e}")
+        notification_queue.add(success_url, payload)
 
 async def notify_server_failed(code: str, job_id: str, fail_message: str):
     """Notify server of failed print"""
@@ -343,24 +345,23 @@ async def notify_server_failed(code: str, job_id: str, fail_message: str):
     from app.server_api import SERVER_URL, KIOSK_ID
     
     fail_url = f"{SERVER_URL}/{KIOSK_ID}/job/{job_id}/status"
-    
+    payload = {
+        "code": code,
+        "job_id": job_id,
+        "kiosk_id": KIOSK_ID,
+        "status": "failed",
+        "message": f"Print failed: {fail_message}"
+    }
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.post(
-                fail_url,
-                json={
-                    "code": code,
-                    "job_id": job_id,
-                    "kiosk_id": KIOSK_ID,
-                    "status": "failed",
-                    "message": f"Print failed: {fail_message}"
-                }
-            )
+            resp = await client.post(fail_url, json=payload)
             
             if resp.status_code == 200:
                 event_logger.info(f"Server notified of failure: {code}")
             else:
                 app_logger.warning(f"Server notification failed: {resp.status_code}")
+                payload 
+                notification_queue.add(fail_url, payload)
                 
     except Exception as e:
         app_logger.error(f"Failed to notify server: {e}")
