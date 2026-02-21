@@ -323,7 +323,7 @@ async def notify_server_success(code: str, job_id: str):
         "code": code,
         "job_id": job_id,
         "kiosk_id": KIOSK_ID,
-        "status": "failed",
+        "status": "completed",
         "message": f"Print Job Completed"
     }
     try:

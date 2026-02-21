@@ -15,7 +15,7 @@ def start_health_watcher():
     health_logger.info("started health watcher")
     
     last_state = None
-    time.sleep(5)
+    time.sleep(6)
     while True:
         try:
             healthy = system_healthy()
@@ -27,11 +27,11 @@ def start_health_watcher():
                         loop.run_until_complete(
                             ws_manager.broadcast({"event": "HEALTHY"})
                         )
-                        loop.run_until_complete(
-                            notification_queue.process_queue()
-                        )
                     except Exception as e :
                         health_logger.error(f"Broadcast exception: {e}")
+                    loop.run_until_complete(
+                            notification_queue.process_queue()
+                        )
                     last_state = healthy
                 else:
                     if kiosk_state.is_handling_print_error():

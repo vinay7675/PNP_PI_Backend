@@ -62,7 +62,7 @@ class NotificationQueue:
                     )
                     
                     if resp.status_code == 200:
-                        event_logger.info(f"✅ Sent queued notification: {notification['payload'].get('code')}")
+                        event_logger.info(f"✅ Sent queued notification: {notification['payload'].get('code')} to {notification['url']}")
                         sent.append(notification)
                     else:
                         app_logger.warning(f"Server returned {resp.status_code} for queued notification")
