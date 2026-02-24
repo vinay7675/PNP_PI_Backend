@@ -12,6 +12,7 @@ from app.health import system_healthy
 from app.health_watcher import start_health_watcher
 from app.logger import app_logger, event_logger
 from app.diagnostics import run_diagnostics
+from app.heartbeat import start_heartbeat
 from app.recovery_poller import start_recovery_polling, is_in_recovery_mode
 
 app = FastAPI()
@@ -102,6 +103,7 @@ def startup():
     '''async def startup_event():
         asyncio.create_task(start_health_watcher)'''
     threading.Thread(target=start_health_watcher, daemon=True).start()
+    threading.Thread(target=start_heartbeat, daemon=True).start()
 
 @app.post("/log/frontend")
 def frontend_log(payload: dict):

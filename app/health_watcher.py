@@ -35,7 +35,7 @@ def start_health_watcher():
                     last_state = healthy
                 else:
                     if kiosk_state.is_handling_print_error():
-                        health_logger.error(f"Print job is handling the eror")
+                        #health_logger.error(f"Print job is handling the eror")
                         last_state = None
                     else:
                         try:
