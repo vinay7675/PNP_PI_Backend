@@ -20,7 +20,8 @@ async def fetch_print_job(code: str):
             raise UpstreamFailure("SERVER_UNREACHABLE")
 
         if (resp.status_code == 404 or resp.status_code == 400):
-            raise InvalidCode("INVALID_CODE")
+            data1 = resp.json()
+            raise InvalidCode(f"{data1['error']}")
 
         if resp.status_code != 200:
             raise UpstreamFailure("BAD_SERVER_RESPONSE")

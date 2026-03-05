@@ -148,16 +148,18 @@ async def start_print(req: PrintRequest):
             content={"status": "DONE"}
         )
         
-    except InvalidCode:
+    except InvalidCode as ex:
         app_logger.error(
-            "Code entered is not valid. Resulted in invalid state")
+            f"Code entered is not valid. Resulted in invalid state : {ex}")
         try:
             await ws_manager.broadcast({"event": "INVALID_CODE"})
         except Exception as e:
             app_logger.error(f"Failed to broadcast INVALID_CODE: {e}")
         return JSONResponse(
             status_code=400,
-            content={"status": "INVALID_CODE"}
+            content={"status": "INVALID_CODE",
+                    "errorMsg": f"{ex}"
+            }
         )
         
     except UpstreamFailure as e:
