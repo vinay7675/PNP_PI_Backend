@@ -15,7 +15,7 @@ def start_health_watcher():
     health_logger.info("started health watcher")
     
     last_state = None
-    time.sleep(6)
+    time.sleep(10)
     while True:
         try:
             healthy = system_healthy()
@@ -31,6 +31,9 @@ def start_health_watcher():
                         health_logger.error(f"Broadcast exception: {e}")
                     loop.run_until_complete(
                             notification_queue.process_queue()
+                        )
+                    loop.run_until_complete(
+                                send_server_enable("Printer is back online or the system is healthy")
                         )
                     last_state = healthy
                 else:
@@ -77,3 +80,26 @@ async def send_server_outOfService(message_str: str):
                 
     except Exception as e:
         app_logger.error(f"Failed to notify out of service to server: {e}")
+        
+async def send_server_enable(message_str: str):
+    import httpx
+    from app.server_api import SERVER_URL, KIOSK_ID
+    
+    notify_url = f"{SERVER_URL}/{KIOSK_ID}/out_of_enable"
+    
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                notify_url,
+                json={
+                    "message": f"{message_str}  Kiosk ID : {KIOSK_ID}"
+                }
+            )
+            
+            if resp.status_code == 200:
+                event_logger.info(f"Server notification for Enable Successful: {code}")
+            else:
+                app_logger.warning(f"Failed to notify Enable to server: {resp.status_code}")
+                
+    except Exception as e:
+        app_logger.error(f"Failed to notify Enable to server: {e}")
